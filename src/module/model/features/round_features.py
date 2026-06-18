@@ -14,8 +14,9 @@ from utils.data_processing import fill_feature_means
 REQUIRED_COLS: list[str] = []  # avg_round_diff is optional
 
 FEATURE_COLS: list[str] = [
-    "dominance_score",
-    "avg_round_diff_ma5",
+    # dominance_score excluded: it IS the current match's avg_round_diff
+    # (direct leakage — the model would see the score of the match it's predicting).
+    "avg_round_diff_ma5",  # safe: rolling mean of PAST 5 matches with shift(1)
 ]
 
 

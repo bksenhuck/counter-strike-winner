@@ -16,7 +16,12 @@ def get_logger(name: str, level: int = logging.INFO, log_file: Path | None = Non
     logger.setLevel(level)
     formatter = logging.Formatter(_LOG_FORMAT, datefmt=_DATE_FORMAT)
 
-    console_handler = logging.StreamHandler(sys.stdout)
+    try:
+        import io
+        stream = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    except AttributeError:
+        stream = sys.stdout
+    console_handler = logging.StreamHandler(stream)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 

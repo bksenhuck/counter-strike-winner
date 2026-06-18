@@ -120,8 +120,8 @@ FEATURE_COLS: list[str] = list(
         + _FATIGUE_COLS
         + _EVENT_COLS
         + _TEMPORAL_COLS
-        + _CONSISTENCY_COLS
-        + _ROUND_COLS
+        # _CONSISTENCY_COLS excluded: uses current-match player stats (data leakage)
+        + _ROUND_COLS  # only avg_round_diff_ma5 (shift(1) historical)
     )
 )
 
@@ -140,7 +140,7 @@ _PIPELINE_STEPS: list[tuple] = [
     (add_fatigue_features,      "fatigue_features",      "days_rest, matches_7d/14d/30d"),
     (add_event_stage_features,  "event_stage_features",  "stage_encoded, pressure_score"),
     (add_temporal_features,     "temporal_features",     "day_of_week, month, season"),
-    (add_consistency_features,  "consistency_features",  "star_dependency, fragility, firepower"),
+    (add_consistency_features,  "consistency_features",  "[helper] star_dependency, fragility, firepower (current-match raw)"),
     (add_round_features,        "round_features",        "dominance_score, avg_round_diff_ma5"),
 ]
 

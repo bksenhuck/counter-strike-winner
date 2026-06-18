@@ -19,19 +19,11 @@ from utils.data_processing import fill_feature_means
 
 REQUIRED_COLS: list[str] = []  # all columns handled gracefully
 
-FEATURE_COLS: list[str] = [
-    "team1_star_dependency",
-    "team2_star_dependency",
-    "team1_fragility",
-    "team2_fragility",
-    "team1_consistency",
-    "team2_consistency",
-    "team1_firepower",
-    "team2_firepower",
-    "firepower_diff",
-    "star_dependency_diff",
-    "consistency_diff",
-]
+# FEATURE_COLS is intentionally empty: all computed values use current-match
+# player stats (rating_max, rating_std, etc.) which are unavailable before the
+# match starts → data leakage if included in the model.
+# The columns are still computed so future modules can roll them with shift(1).
+FEATURE_COLS: list[str] = []
 
 _FIREPOWER_W_RATING: float = 0.5
 _FIREPOWER_W_ADR: float = 0.3
