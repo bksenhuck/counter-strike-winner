@@ -24,8 +24,9 @@ poetry.lock
 .ipynb_checkpoints/
 *.ipynb~
 
-# Data (keep raw data out of git — use DVC or similar)
-data/processed/
+# Data (keep raw data out of git — distribute separately or use DVC)
+datasets/
+data/
 models/*.pkl
 models/plots/
 
