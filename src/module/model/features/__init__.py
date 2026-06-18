@@ -185,35 +185,37 @@ def get_feature_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 def build_team_stats_lookup(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     """Extract each team's most recent pre-match feature vector.
 
-    Processes rows chronologically. For each match, both teams' feature values
-    are stored under their team name, overwriting older values. The final dict
-    holds the state of every team as of their last known match.
+    Vectorized: O(N) pandas ops instead of O(N × C) Python row iteration.
+    Strategy: normalise both team positions to a common schema, concat,
+    sort by date, deduplicate keeping the last row per team.
 
     Returns:
         dict: {team_name: {stat_name_without_position_prefix: value}}
-
-    Usage in predict_match()::
-
-        team_stats = build_team_stats_lookup(df)
-        model.predict_match("NaVi", "Astralis", "bo3", team_stats=team_stats)
     """
-    df = df.sort_values("date")
-    lookup: dict[str, dict[str, Any]] = {}
+    t1_stat_cols = [c for c in df.columns if c.startswith("team1_")]
+    t2_stat_cols = [c for c in df.columns if c.startswith("team2_")]
 
-    for _, row in df.iterrows():
-        for pos in (1, 2):
-            team = row.get(f"team{pos}")
-            if not team or not isinstance(team, str):
-                continue
-            prefix = f"team{pos}_"
-            stats = {
-                col[len(prefix):]: val
-                for col, val in row.items()
-                if col.startswith(prefix) and not pd.isna(val)
-            }
-            lookup[team] = stats
+    t1 = df[["date", "team1", *t1_stat_cols]].rename(
+        columns={"team1": "_team", **{c: c[6:] for c in t1_stat_cols}}
+    )
+    t2 = df[["date", "team2", *t2_stat_cols]].rename(
+        columns={"team2": "_team", **{c: c[6:] for c in t2_stat_cols}}
+    )
 
-    return lookup
+    last_rows = (
+        pd.concat([t1, t2], ignore_index=True)
+        .dropna(subset=["_team"])
+        .loc[lambda d: d["_team"].apply(lambda x: isinstance(x, str) and bool(x.strip()))]
+        .sort_values("date")
+        .drop_duplicates(subset=["_team"], keep="last")
+        .drop(columns=["date"])
+        .set_index("_team")
+    )
+
+    return {
+        team: {k: v for k, v in row.items() if pd.notna(v)}
+        for team, row in last_rows.iterrows()
+    }
 
 
 def load_features(processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
