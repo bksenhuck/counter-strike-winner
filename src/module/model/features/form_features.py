@@ -10,6 +10,7 @@ comparing their short-term rating MA to their long-term rating MA.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from utils.data_processing import fill_feature_means
@@ -95,18 +96,36 @@ def _rolling_win_rate(
 def _rolling_win_rate_days(
     df: pd.DataFrame, team_col: str, winner_val: int, days: int
 ) -> pd.Series:
-    """Win rate in the last `days` calendar days per team, excluding current match."""
+    """Win rate in the last `days` calendar days per team, excluding current match.
+
+    Uses searchsorted + prefix sums for O(N log N) total instead of O(N²) iterrows.
+    Same semantics as the original: window is [current-days, current).
+    """
     won = (df["winner"] == winner_val).astype(float)
     result = pd.Series(float("nan"), index=df.index)
-    for team, group_idx in df.groupby(df[team_col]).groups.items():
+    td = np.timedelta64(days, "D")
+
+    for team, group_idx in df.groupby(team_col).groups.items():
         sub = df.loc[group_idx].sort_values("date")
-        sub_won = won.loc[sub.index]
-        vals = []
-        for idx, row in sub.iterrows():
-            cutoff = row["date"] - pd.Timedelta(days=days)
-            mask = (sub["date"] >= cutoff) & (sub["date"] < row["date"])
-            vals.append(sub_won[mask].mean() if mask.any() else float("nan"))
-        result.loc[sub.index] = vals
+        dates = sub["date"].values.astype("datetime64[D]")
+        w = won.loc[sub.index].values
+        n = len(dates)
+        if n == 0:
+            continue
+
+        cutoffs = dates - td
+        lefts = np.searchsorted(dates, cutoffs, side="left")
+        rights = np.searchsorted(dates, dates, side="left")  # count strictly before
+
+        # Prefix-sum array for O(1) range win sums
+        cumw = np.empty(n + 1)
+        cumw[0] = 0.0
+        np.cumsum(w, out=cumw[1:])
+
+        counts = rights - lefts
+        win_sums = cumw[rights] - cumw[lefts]
+        result.loc[sub.index] = np.where(counts > 0, win_sums / counts, float("nan"))
+
     return result
 
 

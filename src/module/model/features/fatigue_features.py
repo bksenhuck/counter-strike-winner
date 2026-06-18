@@ -7,6 +7,7 @@ All are computed from prior matches only â€” safe for pre-match prediction.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from utils.data_processing import fill_feature_means
@@ -55,29 +56,30 @@ def add_fatigue_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def _days_since_last_match(df: pd.DataFrame, team_col: str) -> pd.Series:
     """Days between the current match date and the team's most recent prior match."""
-    result = pd.Series(float("nan"), index=df.index)
-    for team, group_idx in df.groupby(df[team_col]).groups.items():
-        sub = df.loc[group_idx].sort_values("date")
-        dates = sub["date"].values
-        vals = [float("nan")] + [
-            (pd.Timestamp(dates[i]) - pd.Timestamp(dates[i - 1])).days
-            for i in range(1, len(dates))
-        ]
-        result.loc[sub.index] = vals
-    return result
+    # df is already sorted by date; diff() within each group gives days since last match.
+    return df.groupby(team_col)["date"].diff().dt.days
 
 
 def _matches_in_window(df: pd.DataFrame, team_col: str, days: int) -> pd.Series:
-    """Count of prior matches played by the team in the last `days` days."""
+    """Count of prior matches played by the team in the last `days` days.
+
+    Uses searchsorted for O(N log N) total instead of O(N²) iterrows per team.
+    Same semantics as the original: count matches where date in [current-days, current).
+    """
     result = pd.Series(0.0, index=df.index)
-    for team, group_idx in df.groupby(df[team_col]).groups.items():
+    td = np.timedelta64(days, "D")
+
+    for team, group_idx in df.groupby(team_col).groups.items():
         sub = df.loc[group_idx].sort_values("date")
-        vals = []
-        for idx, row in sub.iterrows():
-            cutoff = row["date"] - pd.Timedelta(days=days)
-            count = ((sub["date"] >= cutoff) & (sub["date"] < row["date"])).sum()
-            vals.append(float(count))
-        result.loc[sub.index] = vals
+        dates = sub["date"].values.astype("datetime64[D]")
+
+        cutoffs = dates - td
+        # lefts[i] = first position with date >= cutoff  (window left bound)
+        # rights[i] = first position with date >= current (= count of dates strictly before current)
+        lefts = np.searchsorted(dates, cutoffs, side="left")
+        rights = np.searchsorted(dates, dates, side="left")
+        result.loc[sub.index] = (rights - lefts).astype(float)
+
     return result
 
 

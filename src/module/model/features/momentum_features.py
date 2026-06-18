@@ -92,35 +92,36 @@ def _rolling_trend(df: pd.DataFrame, team_col: str, stat_col: str) -> pd.Series:
 
     A positive slope means the stat is rising (team is improving).
     Returns NaN when fewer than 2 prior data points are available.
+    Uses rolling.apply(raw=True) to pass numpy arrays directly — avoids the
+    per-element Python loop in the original implementation.
     """
-    def _slope(series: pd.Series) -> pd.Series:
-        result = pd.Series(index=series.index, dtype=float)
-        shifted = series.shift(1)
-        for i in range(len(series)):
-            window = shifted.iloc[max(0, i - _WINDOW + 1): i + 1].dropna()
-            if len(window) < 2:
-                result.iloc[i] = float("nan")
-            else:
-                x = np.arange(len(window))
-                result.iloc[i] = float(np.polyfit(x, window.values, 1)[0])
-        return result
+    def _slope(x: np.ndarray) -> float:
+        if len(x) < 2:
+            return float("nan")
+        return float(np.polyfit(np.arange(len(x)), x, 1)[0])
 
-    return df.groupby(df[team_col])[stat_col].transform(_slope)
+    return (
+        df.groupby(df[team_col])[stat_col]
+        .transform(
+            lambda s: s.shift(1).rolling(_WINDOW, min_periods=2).apply(_slope, raw=True)
+        )
+    )
 
 
 def _win_streak(df: pd.DataFrame, team_col: str, winner_val: int) -> pd.Series:
-    """1 if team won their last _STREAK_THRESHOLD consecutive matches, else 0."""
-    won = (df["winner"] == winner_val).astype(int)
+    """1 if team won their last _STREAK_THRESHOLD consecutive matches, else 0.
 
-    def _streak(s: pd.Series) -> pd.Series:
-        result = pd.Series(0, index=s.index, dtype=int)
-        s_shifted = s.shift(1)
-        for i in range(len(s)):
-            window = s_shifted.iloc[max(0, i - _STREAK_THRESHOLD + 1): i + 1].dropna()
-            if len(window) >= _STREAK_THRESHOLD and window.sum() == _STREAK_THRESHOLD:
-                result.iloc[i] = 1
-        return result
-
-    return won.groupby(df[team_col]).transform(_streak)
+    Fully vectorized using rolling.sum() — no Python loop per match.
+    """
+    won = (df["winner"] == winner_val).astype(float)
+    rolling_sum = (
+        won.groupby(df[team_col])
+        .transform(
+            lambda s: s.shift(1)
+            .rolling(_STREAK_THRESHOLD, min_periods=_STREAK_THRESHOLD)
+            .sum()
+        )
+    )
+    return (rolling_sum == _STREAK_THRESHOLD).astype(int).fillna(0)
 
 

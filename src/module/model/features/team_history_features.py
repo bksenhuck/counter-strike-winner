@@ -7,6 +7,7 @@ are filled with the dataset mean rather than dropped.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from utils.data_processing import fill_feature_means
@@ -90,39 +91,47 @@ def _rolling_win_rate(
 
 
 def _head_to_head(df: pd.DataFrame) -> pd.DataFrame:
-    """Return per-match head-to-head stats (only matches before the current date)."""
-    records = []
-    df_sorted = df.sort_values("date").reset_index(drop=True)
+    """Return per-match head-to-head stats using vectorized cumsum (O(N log N))."""
+    base = df[["date", "match_id", "team1", "team2", "winner"]].sort_values("date")
 
-    for idx, row in df_sorted.iterrows():
-        prior = df_sorted.iloc[:idx]
+    # Expand to two rows per match: one from each team's perspective
+    t1 = base.assign(
+        team=base["team1"], opponent=base["team2"],
+        won=(base["winner"] == 1).astype(int), _src=1,
+    )
+    t2 = base.assign(
+        team=base["team2"], opponent=base["team1"],
+        won=(base["winner"] == 0).astype(int), _src=2,
+    )
 
-        mask = (
-            ((prior["team1"] == row["team1"]) & (prior["team2"] == row["team2"])) |
-            ((prior["team1"] == row["team2"]) & (prior["team2"] == row["team1"]))
+    edges = (
+        pd.concat(
+            [t1[["date", "match_id", "team", "opponent", "won", "_src"]],
+             t2[["date", "match_id", "team", "opponent", "won", "_src"]]],
+            ignore_index=True,
         )
-        h2h = prior[mask]
+        .sort_values("date")
+    )
 
-        t1_wins = int(
-            ((h2h["team1"] == row["team1"]) & (h2h["winner"] == 1)).sum() +
-            ((h2h["team2"] == row["team1"]) & (h2h["winner"] == 0)).sum()
-        )
-        t2_wins = int(
-            ((h2h["team1"] == row["team2"]) & (h2h["winner"] == 1)).sum() +
-            ((h2h["team2"] == row["team2"]) & (h2h["winner"] == 0)).sum()
-        )
-        total = len(h2h)
+    # cumsum() - current_won = wins BEFORE this match (excludes current row).
+    # cumcount() = 0-indexed rank within group = number of prior meetings.
+    grp = edges.groupby(["team", "opponent"])
+    edges["h2h_wins_pre"] = (grp["won"].cumsum() - edges["won"]).values
+    edges["h2h_total_pre"] = grp.cumcount().values
 
-        records.append(
-            {
-                "match_id": row["match_id"],
-                "h2h_team1_wins": t1_wins,
-                "h2h_team2_wins": t2_wins,
-                "h2h_total": total,
-                "h2h_team1_win_rate": t1_wins / total if total > 0 else float("nan"),
-            }
-        )
+    t1_h2h = (
+        edges.loc[edges["_src"] == 1, ["match_id", "h2h_wins_pre", "h2h_total_pre"]]
+        .rename(columns={"h2h_wins_pre": "h2h_team1_wins", "h2h_total_pre": "h2h_total"})
+    )
+    t2_h2h = (
+        edges.loc[edges["_src"] == 2, ["match_id", "h2h_wins_pre"]]
+        .rename(columns={"h2h_wins_pre": "h2h_team2_wins"})
+    )
 
-    return pd.DataFrame(records)
+    result = t1_h2h.merge(t2_h2h, on="match_id")
+    result["h2h_team1_win_rate"] = (
+        result["h2h_team1_wins"] / result["h2h_total"].replace(0, float("nan"))
+    )
+    return result[["match_id", "h2h_team1_wins", "h2h_team2_wins", "h2h_total", "h2h_team1_win_rate"]]
 
 
