@@ -27,7 +27,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from conf.settings import MODELS_DIR, PLOTS_DIR
+from conf.settings import MODELS_DIR, RESULTS_DIR
 from utils.decorators import log_call, timer
 from utils.logger import get_logger
 
@@ -57,7 +57,7 @@ class ModelEvaluator:
     def __init__(
         self,
         model,
-        plots_dir: Path = PLOTS_DIR,
+        plots_dir: Path = RESULTS_DIR,
     ) -> None:
         self.model = model
         self.plots_dir = plots_dir

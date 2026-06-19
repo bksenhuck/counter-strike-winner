@@ -1,16 +1,20 @@
 """CSWinnerModel — all model logic in one place.
 
 Responsibilities:
-  - Build the sklearn Pipeline (imputer → scaler → XGBoost)
+  - Build the sklearn Pipeline (imputer → scaler → classifier)
   - Train, evaluate, and cross-validate
   - Save / load the fitted pipeline
   - Predict (batch labels, batch probabilities, single-match raw dict)
+
+Supported model types (configured in conf/models/):
+  "xgboost", "lightgbm", "logistic_regression", "neural_network"
 
 train.py and predict.py are thin entry points that instantiate this class.
 """
 
 from __future__ import annotations
 
+import importlib
 import time
 from pathlib import Path
 
@@ -21,9 +25,8 @@ from sklearn.metrics import classification_report, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBClassifier
 
-from conf.settings import MODELS_DIR, RANDOM_STATE, TEST_SIZE, VAL_SIZE
+from conf.settings import MODELS_DIR, RANDOM_STATE
 from src.module.model.features import (
     FEATURE_COLS,
     build_features,
@@ -39,13 +42,6 @@ from src.module.model.settings import (
     PIPELINE_NAME,
     PREDICTION_THRESHOLD,
     SCALER_STEP,
-    XGB_COLSAMPLE_BYTREE,
-    XGB_EVAL_METRIC,
-    XGB_LEARNING_RATE,
-    XGB_MAX_DEPTH,
-    XGB_N_ESTIMATORS,
-    XGB_N_JOBS,
-    XGB_SUBSAMPLE,
 )
 from utils.decorators import log_call, timer, validate_dataframe
 from utils.file_utils import load_pkl, save_pkl
@@ -53,15 +49,19 @@ from utils.logger import get_logger
 
 _logger = get_logger(__name__)
 
+_VALID_MODEL_TYPES = ("xgboost", "lightgbm", "logistic_regression", "neural_network")
+
 
 class CSWinnerModel:
-    """XGBoost-based classifier for CS match winner prediction.
+    """Classifier for CS match winner prediction.
+
+    Supports multiple model backends declared in conf/models/.
 
     Usage — training
     ----------------
-    >>> model = CSWinnerModel()
+    >>> model = CSWinnerModel()                          # XGBoost (default)
+    >>> model = CSWinnerModel(model_type="lightgbm")
     >>> model.fit(X_train, y_train)
-    >>> model.evaluate(X_test, y_test)
     >>> model.save()
 
     Usage — inference
@@ -74,16 +74,23 @@ class CSWinnerModel:
 
     def __init__(
         self,
+        model_type: str = "xgboost",
         random_state: int = RANDOM_STATE,
         n_splits: int = CV_N_SPLITS,
         models_dir: Path = MODELS_DIR,
-        pipeline_name: str = PIPELINE_NAME,
+        pipeline_name: str | None = None,
         threshold: float = PREDICTION_THRESHOLD,
     ) -> None:
+        if model_type not in _VALID_MODEL_TYPES:
+            raise ValueError(
+                f"Unknown model_type '{model_type}'. "
+                f"Valid options: {_VALID_MODEL_TYPES}"
+            )
+        self.model_type = model_type
         self.random_state = random_state
         self.n_splits = n_splits
         self.models_dir = models_dir
-        self.pipeline_name = pipeline_name
+        self.pipeline_name = pipeline_name or f"{model_type}_pipeline"
         self.threshold = threshold
         self.pipeline: Pipeline | None = None
 
@@ -106,22 +113,16 @@ class CSWinnerModel:
             self, for method chaining.
         """
         _logger.info(
-            "=== Training Pipeline: SimpleImputer → StandardScaler → XGBClassifier ===",
+            "=== Training Pipeline: SimpleImputer → StandardScaler → %s ===",
+            self.model_type,
         )
         _logger.info(
             "  Train samples: %d | Features: %d",
             len(X_train), X_train.shape[1],
         )
-        _logger.info(
-            "  XGBoost params: n_estimators=%d  max_depth=%d  lr=%.3f  subsample=%.2f  colsample=%.2f",
-            XGB_N_ESTIMATORS, XGB_MAX_DEPTH, XGB_LEARNING_RATE, XGB_SUBSAMPLE, XGB_COLSAMPLE_BYTREE,
-        )
 
         self.pipeline = self._build_pipeline()
 
-        _logger.info("  [1/3] SimpleImputer (strategy=%s)...", IMPUTER_STRATEGY)
-        _logger.info("  [2/3] StandardScaler...")
-        _logger.info("  [3/3] XGBClassifier (fitting %d estimators)...", XGB_N_ESTIMATORS)
         t0 = time.perf_counter()
         self.pipeline.fit(X_train, y_train)
         _logger.info("  Pipeline fit complete in %.1fs", time.perf_counter() - t0)
@@ -137,14 +138,12 @@ class CSWinnerModel:
     def cross_validate(self, X: pd.DataFrame, y: pd.Series) -> dict[str, float]:
         """Run stratified k-fold CV and return mean / std AUC.
 
-        Folds run sequentially so each XGBClassifier can use all CPU cores
-        without nested-parallelism conflicts (important on Windows).
-
         Returns:
             dict with keys: mean_auc, std_auc.
         """
         _logger.info(
-            "=== %d-Fold Stratified Cross-Validation ===", self.n_splits,
+            "=== %d-Fold Stratified Cross-Validation (%s) ===",
+            self.n_splits, self.model_type,
         )
         _logger.info(
             "  Samples: %d | Features: %d | Scoring: %s",
@@ -209,7 +208,14 @@ class CSWinnerModel:
     ) -> CSWinnerModel:
         """Load a persisted pipeline from disk and return a ready model instance."""
         path = models_dir / f"{pipeline_name}.pkl"
-        instance = cls(pipeline_name=pipeline_name, models_dir=models_dir)
+        # Infer model_type from pipeline_name (e.g. "lightgbm_pipeline" → "lightgbm")
+        inferred_type = pipeline_name.replace("_pipeline", "")
+        model_type = inferred_type if inferred_type in _VALID_MODEL_TYPES else "xgboost"
+        instance = cls(
+            model_type=model_type,
+            pipeline_name=pipeline_name,
+            models_dir=models_dir,
+        )
         instance.pipeline = load_pkl(path)
         return instance
 
@@ -279,20 +285,6 @@ class CSWinnerModel:
         Returns:
             dict with predicted_winner, team1, team2, prob_team1_wins,
             prob_team2_wins, elo_diff.
-
-        Example::
-
-            from src.module.model.data import load_raw_data, preprocess
-            from src.module.model.features import build_features, build_team_stats_lookup
-
-            raw = load_raw_data()
-            df  = preprocess(raw)
-            df  = build_features(df)
-            lookup = build_team_stats_lookup(df)
-
-            model  = CSWinnerModel.load()
-            result = model.predict_match("NaVi", "Astralis", "bo3",
-                                         stage="Grand Final", team_stats=lookup)
         """
         self._ensure_fitted()
 
@@ -316,10 +308,8 @@ class CSWinnerModel:
         for stat, val in t2_stats.items():
             row[f"team2_{stat}"] = val
 
-        # Format context (known before match)
         row["format_maps"] = {"bo1": 1, "bo3": 3, "bo5": 5}.get(match_format.lower(), 3)
 
-        # Derived pairwise features not captured per-team
         row.setdefault("elo_diff", row.get("team1_elo", 1000.0) - row.get("team2_elo", 1000.0))
         row.setdefault("elo_ratio", row.get("team1_elo", 1000.0) / max(row.get("team2_elo", 1.0), 1e-6))
         row.setdefault("overall_wr_diff", row.get("team1_overall_wr", 0.5) - row.get("team2_overall_wr", 0.5))
@@ -334,7 +324,25 @@ class CSWinnerModel:
         row.setdefault("rest_advantage", row.get("team1_days_rest", 7.0) - row.get("team2_days_rest", 7.0))
         row.setdefault("fatigue_advantage", row.get("team2_matches_30d", 5.0) - row.get("team1_matches_30d", 5.0))
 
-        # Stage context (optional)
+        # HLTV ranking diffs (from ranking_features / player_ranking_features)
+        # team1_hltv_rank etc. come from the lookup; diffs must be recomputed here
+        row.setdefault(
+            "hltv_rank_diff",
+            row.get("team2_hltv_rank", 500.0) - row.get("team1_hltv_rank", 500.0),
+        )
+        row.setdefault(
+            "hltv_rating_diff",
+            row.get("team1_hltv_rating", 1.0) - row.get("team2_hltv_rating", 1.0),
+        )
+        row.setdefault(
+            "player_rank_diff",
+            row.get("team2_best_player_rank", 500.0) - row.get("team1_best_player_rank", 500.0),
+        )
+        row.setdefault(
+            "player_rating_diff",
+            row.get("team1_avg_player_rating", 1.0) - row.get("team2_avg_player_rating", 1.0),
+        )
+
         if stage:
             from src.module.model.features.event_stage_features import _encode_stage
             encoded = float(_encode_stage(stage))
@@ -389,23 +397,13 @@ class CSWinnerModel:
     # ------------------------------------------------------------------
 
     def _build_pipeline(self) -> Pipeline:
+        mod = importlib.import_module(f"conf.models.{self.model_type}")
+        classifier = mod.build_classifier(self.random_state)
         return Pipeline(
             steps=[
                 (IMPUTER_STEP, SimpleImputer(strategy=IMPUTER_STRATEGY)),
                 (SCALER_STEP, StandardScaler()),
-                (
-                    CLASSIFIER_STEP,
-                    XGBClassifier(
-                        n_estimators=XGB_N_ESTIMATORS,
-                        max_depth=XGB_MAX_DEPTH,
-                        learning_rate=XGB_LEARNING_RATE,
-                        subsample=XGB_SUBSAMPLE,
-                        colsample_bytree=XGB_COLSAMPLE_BYTREE,
-                        eval_metric=XGB_EVAL_METRIC,
-                        random_state=self.random_state,
-                        n_jobs=XGB_N_JOBS,
-                    ),
-                ),
+                (CLASSIFIER_STEP, classifier),
             ]
         )
 

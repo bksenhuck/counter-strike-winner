@@ -13,11 +13,19 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
 
-RAW_DIR: Path = BASE_DIR / os.getenv("RAW_DIR", "datasets")
+RAW_DIR: Path = BASE_DIR / os.getenv("RAW_DIR", "data/datasets/results")
 PROCESSED_DIR: Path = BASE_DIR / os.getenv("PROCESSED_DIR", "data/processed")
 MODELS_DIR: Path = BASE_DIR / os.getenv("MODELS_DIR", "models")
 PLOTS_DIR: Path = MODELS_DIR / "plots"
+RESULTS_DIR: Path = BASE_DIR / os.getenv("RESULTS_DIR", "data/results")
 LOGS_DIR: Path = BASE_DIR / "logs"
+
+# External ranking datasets (HLTV annual stats)
+TEAM_RANKING_DIR: Path = BASE_DIR / os.getenv("TEAM_RANKING_DIR", "data/datasets/team_stats")
+PLAYER_RANKING_DIR: Path = BASE_DIR / os.getenv("PLAYER_RANKING_DIR", "data/datasets/player_stats")
+
+for _dir in (PROCESSED_DIR, MODELS_DIR, PLOTS_DIR, RESULTS_DIR, LOGS_DIR):
+    _dir.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Raw filenames (inside each year sub-folder)

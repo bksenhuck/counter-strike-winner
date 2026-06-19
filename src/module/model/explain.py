@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import shap
 
-from conf.settings import MODELS_DIR, PLOTS_DIR
+from conf.settings import MODELS_DIR, RESULTS_DIR
 from src.module.model.features import FEATURE_COLS, build_features
 from src.module.model.model import CSWinnerModel
 from src.module.model.settings import (
@@ -46,12 +46,13 @@ class ModelExplainer:
         self,
         pipeline_name: str = PIPELINE_NAME,
         models_dir: Path = MODELS_DIR,
-        plots_dir: Path = PLOTS_DIR,
+        plots_dir: Path = RESULTS_DIR,
         model: CSWinnerModel | None = None,
     ) -> None:
         self.pipeline_name = pipeline_name
         self.models_dir = models_dir
         self.plots_dir = plots_dir
+        self.plots_dir.mkdir(parents=True, exist_ok=True)
         self._model: CSWinnerModel | None = model  # accept pre-loaded model
 
     def load(self) -> ModelExplainer:

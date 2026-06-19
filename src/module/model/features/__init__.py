@@ -62,6 +62,16 @@ from src.module.model.features.historical_features import (
     add_historical_features,
 )
 from src.module.model.features.map_features import add_map_features
+from src.module.model.features.player_ranking_features import (
+    FEATURE_COLS as _PLAYER_RANK_COLS,
+    REQUIRED_COLS as _PLAYER_RANK_REQUIRED,
+    add_player_ranking_features,
+)
+from src.module.model.features.ranking_features import (
+    FEATURE_COLS as _RANKING_COLS,
+    REQUIRED_COLS as _RANKING_REQUIRED,
+    add_ranking_features,
+)
 from src.module.model.features.momentum_features import (
     FEATURE_COLS as _MOMENTUM_COLS,
     REQUIRED_COLS as _MOMENTUM_REQUIRED,
@@ -104,6 +114,8 @@ BASE_NUMERIC_FEATURES: list[str] = list(
         + _FORMAT_REQUIRED
         + _CONSISTENCY_REQUIRED
         + _ROUND_REQUIRED
+        + _RANKING_REQUIRED
+        + _PLAYER_RANK_REQUIRED
     )
 )
 
@@ -121,7 +133,9 @@ FEATURE_COLS: list[str] = list(
         + _EVENT_COLS
         + _TEMPORAL_COLS
         # _CONSISTENCY_COLS excluded: uses current-match player stats (data leakage)
-        + _ROUND_COLS  # only avg_round_diff_ma5 (shift(1) historical)
+        + _ROUND_COLS       # only avg_round_diff_ma5 (shift(1) historical)
+        + _RANKING_COLS     # HLTV official team rankings (Y-1, pre-match safe)
+        + _PLAYER_RANK_COLS # HLTV player rankings aggregated per team (Y-1, pre-match safe)
     )
 )
 
@@ -140,8 +154,10 @@ _PIPELINE_STEPS: list[tuple] = [
     (add_fatigue_features,      "fatigue_features",      "days_rest, matches_7d/14d/30d"),
     (add_event_stage_features,  "event_stage_features",  "stage_encoded, pressure_score"),
     (add_temporal_features,     "temporal_features",     "day_of_week, month, season"),
-    (add_consistency_features,  "consistency_features",  "[helper] star_dependency, fragility, firepower (current-match raw)"),
-    (add_round_features,        "round_features",        "dominance_score, avg_round_diff_ma5"),
+    (add_consistency_features,    "consistency_features",    "[helper] star_dependency, fragility, firepower (current-match raw)"),
+    (add_round_features,          "round_features",          "dominance_score, avg_round_diff_ma5"),
+    (add_ranking_features,        "ranking_features",        "hltv_rank/rating/kd/maps per team (Y-1)"),
+    (add_player_ranking_features, "player_ranking_features", "best_player_rank, avg/top3 rating per team (Y-1)"),
 ]
 
 
